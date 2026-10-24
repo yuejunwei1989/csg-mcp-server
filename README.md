@@ -1,25 +1,31 @@
-# Coverity-Semantic-Graph (CSG)
+# Coverity Semantic Graph (CSG) — Server
 
-基于 **Coverity 真实编译捕获**的编译器级 C/C++ 代码知识图谱 MCP Server。
-为 Claude Code / Codex CLI / OpenCode 提供"编译器验证过"的代码语义查询，
+基于 **Coverity 真实编译捕获**的编译器级 C/C++ 代码知识图谱服务端。
+为 AI Agent（MCP 协议）与编辑器（LSP 协议）提供"编译器验证过"的代码语义查询，
 解决 tree-sitter 系图谱工具拿不到真实编译文件、不理解编译器内置语义的问题。
+
+配套 VSCode 插件见独立仓库：[csg-vscode-extension](https://github.com/yuejunwei1989/csg-vscode-extension)。
 
 ## 架构
 
 ```
 cov-build/--dir idir（任意编译器，含 GHS/IAR 模板）
    → csg-index：cov-manage-emit / cov-format-errors 出口解析 → SQLite 图库
-   → csg-mcp：FastMCP stdio server，11 个只读查询工具
+   → csg-mcp：FastMCP stdio server，11 个只读查询工具（AI Agent 用）
+   → csg-ls：  LSP server（编辑器用，复用同一图库）
 ```
 
-- **查询与索引分离**：MCP 只查预构建库，不起 cov 进程，毫秒级响应
+- **查询与索引分离**：MCP/LSP 只查预构建库，不起 cov 进程，毫秒级响应
 - **CLI 为唯一数据出口**：不解析 idir 内部未公开格式
+- **一次建库、多端消费**：AI Agent 与 VSCode 插件共享同一份编译器级事实
 
 ## 安装
 
 ```bash
 pip install .          # Python ≥ 3.10, mcp>=1,<2
 ```
+
+安装后得到 4 个命令：`csg-index` / `csg-mcp` / `csg-ls` / `csg-agent-setup`。
 
 ## 构建索引
 
@@ -33,7 +39,7 @@ python3 tests/mock_data.py mock_idir
 csg-index --db ./graph.db --mock mock_idir
 ```
 
-## 接入 AI Agent
+## 接入 AI Agent（MCP）
 
 ```bash
 csg-agent-setup --db ./graph.db --scope user --only claude,codex,opencode
@@ -43,7 +49,7 @@ csg-agent-setup --db ./graph.db --scope user --only claude,codex,opencode
 - **Codex CLI**：写入 `~/.codex/config.toml` 的 `[mcp_servers.csg]`
 - **OpenCode**：写入 `~/.config/opencode/opencode.json` 的 `mcp` 段
 
-也可手动配置（三端格式相同核心）：
+也可手动配置：
 
 ```json
 // Claude Code / .mcp.json
@@ -57,6 +63,17 @@ command = "csg-mcp"
 [mcp_servers.csg.env]
 CSG_DB = "/abs/graph.db"
 ```
+
+## 接入编辑器（LSP）
+
+```bash
+CSG_DB=/abs/graph.db csg-ls   # 任何 LSP 客户端均可接入
+```
+
+- **VSCode**：直接使用 [csg-vscode-extension](https://github.com/yuejunwei1989/csg-vscode-extension)（已打包 vsix，设置 `csg.dbPath` 即可）
+- **Neovim / 其他编辑器**：将 `csg-ls` 配置为 C/C++ 的 language server
+
+LSP 提供：定义跳转、查找引用、悬停（实体+编译器+缺陷数）、调用层级、Coverity 缺陷诊断。
 
 ## MCP 工具（11 个，只读）
 
@@ -77,6 +94,7 @@ CSG_DB = "/abs/graph.db"
 
 ```bash
 python3 tests/test_pipeline.py   # 15 项检查：mock 数据→索引→建库→查询→MCP
+python3 tests/test_lsp.py        # 12 项检查：definition/references/hover/callHierarchy/诊断
 ```
 
 ## 格式校准（接入真实 idir 时必读）
@@ -98,22 +116,6 @@ python3 tests/test_pipeline.py   # 15 项检查：mock 数据→索引→建库�
 - 深层语义（数据流路径）建议用 CodeXM 自定义检查器补充为额外节点
 - 解析层输出格式依赖 Coverity 版本，升级需回归测试
 
-## VSCode 插件
+## 许可
 
-`vscode-ext/` 内含已编译打包的 VSCode 扩展（基于 LSP，复用同一图库）：
-
-```bash
-code --install-extension vscode-ext/coverity-semantic-graph-0.1.0.vsix
-```
-
-设置 `csg.dbPath` 指向 graph.db 后提供：
-- 定义跳转 / 查找引用（编译器验证，含 GHS/IAR 语义）
-- 悬停：实体信息 + 所属编译器 + Coverity 缺陷数
-- 调用层级（Incoming/Outgoing Calls）
-- 打开文件时自动发布 Coverity 缺陷诊断（问题面板）
-
-## LSP 独立使用
-
-```bash
-CSG_DB=/abs/graph.db csg-ls   # 任何 LSP 客户端均可接入
-```
+本项目代码随附于仓库，Coverity 本身为商业软件，使用需自备许可。
