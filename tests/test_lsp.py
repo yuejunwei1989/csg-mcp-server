@@ -33,8 +33,8 @@ def main() -> None:
     ns.idir = ns.coverity_home = None
     ns.db = str(db_path)
     ns.mock = str(mock)
-    ns.ast_regex = None
-    ns.ast_limit = 0
+    ns.ast_regex = "^parse_packet$"
+    ns.ast_limit = 10
     cmd_index(ns)
 
     st = LspState(GraphDB(str(db_path)))
@@ -90,6 +90,35 @@ def main() -> None:
     # didChange 后 diagnostics 仍可用
     st.on_did_change({"textDocument": {"uri": uri}, "contentChanges": [{"text": text}]})
     check("didChange 缓存更新", len(st._diagnostics(uri)["diagnostics"]) == 2)
+
+    # ===== 新增能力：大纲/全局符号/补全/签名/声明 =====
+    syms = st.on_document_symbol({"textDocument": {"uri": uri}})
+    check("documentSymbol 大纲(5实体)", {x["name"] for x in syms} ==
+          {"parse_packet", "crc32_verify", "crc32_table_lookup", "decode_header", "g_packet_buffer"}, str(syms))
+    check("documentSymbol kind", all(x["kind"] in (12, 13) for x in syms))
+
+    ws = st.on_workspace_symbol({"query": "crc32"})
+    check("workspaceSymbol 全局搜索", {x["name"] for x in ws} == {"crc32_verify", "crc32_table_lookup", "crc32_append"}, str(ws))
+
+    comp = st.on_completion({"textDocument": {"uri": uri}, "position": {"line": 3, "character": 10}})
+    # 光标在 crc32_verify 词内 → 前缀补全命中 crc32 系
+    check("completion 前缀补全", {c["label"] for c in comp} >= {"crc32_verify"}, str(comp))
+    resolved = st.on_completion_resolve(comp[0])
+    check("completionResolve 带位置详情", ":" in resolved.get("detail", "")
+          and "编译器" in resolved.get("documentation", ""), str(resolved))
+
+    sig_text = "    parse_packet(frame\n"
+    import csg.lsp_server as lspmod; lspmod._DOCS[uri] = sig_text
+    sig = st.on_signature_help({"textDocument": {"uri": uri}, "position": {"line": 0, "character": 17}})
+    check("signatureHelp AST 签名", sig and "parse_packet" in sig["signatures"][0]["label"]
+          and "const uint8_t *" in sig["signatures"][0]["label"], str(sig))
+    sig2 = st.on_signature_help({"textDocument": {"uri": uri}, "position": {"line": 0, "character": 2}})
+    check("signatureHelp 无函数返回 None", sig2 is None)
+
+    import csg.lsp_server as lspmod2; lspmod2._DOCS[uri] = text  # 恢复完整文档
+    decl = st.on_declaration({"textDocument": {"uri": uri}, "position": {"line": 3, "character": 10}})
+    check("declaration 跳转 crc32_verify@54", decl and "packet.c" in decl["uri"]
+          and decl["range"]["start"]["line"] == 54, str(decl))
 
     print(f"\n全部通过: {PASS} 项检查")
 
