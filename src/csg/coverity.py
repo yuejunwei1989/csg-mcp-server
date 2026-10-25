@@ -180,3 +180,58 @@ def parse_issues(raw: str) -> list[Issue]:
 def parse_ast(raw: str) -> dict:
     """函数级 AST（CodeXM 模型），原样透传 JSON。"""
     return json.loads(raw)
+
+
+# ---------- 真实文本输出解析（cov-manage-emit 原生格式，已用 cJSON 实测校准）----------
+#
+# list 格式:
+#   Translation unit:
+#   1 -> /abs/path/cJSON.c
+#
+# find [--print-callees] 格式:
+#   Matching function: cJSON_ParseWithOpts
+#    declared at:
+#      /abs/path/cJSON.c:1088:23-/abs/path/cJSON.c:1088:41
+#    defined in TU 1 with row 69
+#   Calls:
+#    Call to: cJSON_ParseWithLengthOpts
+#      declared at:
+#        /abs/path/cJSON.c:1104:23-...
+
+import re as _re
+
+_TU_RE = _re.compile(r"^\s*(\d+)\s*->\s*(.+)$", _re.M)
+_ENT_RE = _re.compile(
+    r"Matching (\w+): (\S+)\n declared at:\n\s+([^:\n]+):(\d+):\d+",
+    _re.M,
+)
+_CALL_RE = _re.compile(r"Call to: (\S+)\n\s+declared at:\n\s+([^:\n]+):(\d+):", _re.M)
+
+
+def parse_tus_text(raw: str) -> list[TU]:
+    return [TU(tu_id=int(m[0]), primary_file=m[1].strip(), compiler="", args=[], source_files=[])
+            for m in _TU_RE.findall(raw)]
+
+
+def parse_entities_text(raw: str) -> list[Entity]:
+    """按 'Matching' 块切分，块内再抓 Call to。真实文本格式，无 JSON。"""
+    entities: list[Entity] = []
+    blocks = raw.split("Matching ")[1:]
+    for blk in blocks:
+        m = _re.match(r"(\w+): (\S+)\n declared at:\n\s+([^:\n]+):(\d+):", blk)
+        if not m:
+            continue
+        kind, name, file, line = m.group(1), m.group(2), m.group(3), int(m.group(4))
+        callees = [(c[0], c[1], int(c[2])) for c in _CALL_RE.findall(blk)]
+        # 记录 callee 的真实定义位置（去重后合并到实体表）
+        entities.append(Entity(
+            name=name, kind=kind, file=file, line=line,
+            definition=f"{file}:{line}",
+            callees=sorted({c[0] for c in callees}),
+        ))
+        # callee 位置信息单独返回不了，通过附加实体兜底：
+        for cname, cfile, cline in callees:
+            if cname != name and not any(e.name == cname for e in entities):
+                entities.append(Entity(name=cname, kind="function", file=cfile, line=cline,
+                                       definition=f"{cfile}:{cline}", callees=[]))
+    return entities
