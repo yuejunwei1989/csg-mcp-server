@@ -48,14 +48,13 @@ python3 tests/mock_data.py mock_idir && csg-index --db graph.db --mock mock_idir
 
 ## 当前状态与待办（2026-10-25）
 
-已完成：MVP 全链路（索引→建库→MCP 查询→LSP），27 项测试通过，已部署两个 GitHub 仓库。
+已完成：MVP 全链路 + Coverity Scan 真实工具链 P0 校准（文本解析器，cJSON 实测，见 docs/验证报告-Coverity-Scan.md）
++ LSP v0.2（补全/大纲/全局符号/签名帮助/声明跳转），35 项测试通过，双仓库已部署。
 
 **下一步（按优先级）：**
-1. **P0 格式校准**：在真实 Coverity idir 上校准 `coverity.py` 解析层
-   - `cov-manage-emit list/find` 官方输出为文本，需在 `parse_tus`/`parse_entities` 增加文本解析分支
-   - 校验 `cov-format-errors --json-output-v10` 与实现假设的 schema 差异
-2. **P0 编译器模板**：用真实 GHS/IAR 项目调通 `cov-configure` 模板
-3. **P1 CI 集成**：cov-build 产物自动触发 `csg-index` 增量更新
+1. **P0 编译器模板**：用真实 GHS/IAR 项目调通 `cov-configure` 模板（gcc 模板已于 2026-10-25 用 Coverity Scan 工具链实测通过）
+2. **P1 缺陷云端化**：Scan 版缺陷在云端，解析 Scan 网页/回执或接入商业版 REST API
+3. **P1 CI 集成（gcc/cJSON 链路已预演通过）**：cov-build 产物自动触发 `csg-index` 增量更新
 4. **P1 LSP 增强**：实现 references 的精确行号（当前指到调用者函数定义行）、workspace symbol 查询
 5. **P2 CodeXM 检查器**：提取数据流语义补充为图库额外边
 6. **P2 发布**：PyPI 包 / Open VSX
