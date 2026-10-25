@@ -73,7 +73,11 @@ CSG_DB=/abs/graph.db csg-ls   # 任何 LSP 客户端均可接入
 - **VSCode**：直接使用 [csg-vscode-extension](https://github.com/yuejunwei1989/csg-vscode-extension)（已打包 vsix，设置 `csg.dbPath` 即可）
 - **Neovim / 其他编辑器**：将 `csg-ls` 配置为 C/C++ 的 language server
 
-LSP 提供：定义跳转、查找引用、悬停（实体+编译器+缺陷数）、调用层级、Coverity 缺陷诊断。
+LSP 提供（目标取代内置 C/C++ 插件的语义能力集）：
+- 定义/声明跳转、查找引用、悬停（实体+编译器+缺陷数）、调用层级、Coverity 缺陷诊断
+- **符号补全**（项目级 FTS 前缀匹配，resolve 显示位置与编译器）
+- **大纲视图**（documentSymbol）/ **全局符号搜索**（Ctrl+T，workspaceSymbol）
+- **签名帮助**（基于已索引的 CodeXM AST 参数表）
 
 ## MCP 工具（11 个，只读）
 
