@@ -28,7 +28,14 @@ SERVER_CAPS = {
     "referencesProvider": True,
     "hoverProvider": True,
     "callHierarchyProvider": True,
+    "declarationProvider": True,
+    "documentSymbolProvider": True,
+    "workspaceSymbolProvider": True,
+    "completionProvider": {"triggerCharacters": [":", ">", "_", "."], "resolveProvider": True},
+    "signatureHelpProvider": {"triggerCharacters": ["("]},
 }
+
+LSP_KIND = {"function": 12, "variable": 13, "type": 23}  # Function/Variable/Struct
 
 # 客户端打开的文档缓存（didOpen/didChange 全量同步）
 _DOCS: dict[str, str] = {}
@@ -166,6 +173,86 @@ class LspState:
         )
         return {"contents": {"kind": "markdown", "value": md}}
 
+    # declaration -> 与 definition 同源（CSG 无独立声明数据时跳转到定义）
+    def on_declaration(self, params: dict) -> Any:
+        return self.on_definition(params)
+
+    # document symbols（大纲视图）
+    def on_document_symbol(self, params: dict) -> list:
+        file = _uri_to_path(params["textDocument"]["uri"])
+        ents = self.db.file_entities(file) or self.db.file_entities(Path(file).name)
+        syms = []
+        for e in ents:
+            line = max(e["line"] - 1, 0)
+            rng = {"start": {"line": line, "character": 0},
+                   "end": {"line": line, "character": len(e["name"])}}
+            syms.append({"name": e["name"], "kind": LSP_KIND.get(e["kind"], 13),
+                         "range": rng, "selectionRange": rng})
+        return syms
+
+    # workspace symbols（Ctrl+T 全局符号搜索）
+    def on_workspace_symbol(self, params: dict) -> list:
+        q = params.get("query", "")
+        out = []
+        for e in self.db.search_entities(q + "*" if q else q, 200):
+            line = max(e["line"] - 1, 0)
+            rng = {"start": {"line": line, "character": 0},
+                   "end": {"line": line, "character": len(e["name"])}}
+            out.append({"name": e["name"], "kind": LSP_KIND.get(e["kind"], 13),
+                        "location": {"uri": "file://" + str(Path(e["file"]).resolve()), "range": rng}})
+        return out
+
+    # completion（项目级符号补全）
+    def on_completion(self, params: dict) -> list:
+        doc = params["textDocument"]["uri"]; pos = params["position"]
+        text = _DOCS.get(doc, "")
+        line = text.split("\n")[pos["line"]] if pos["line"] < len(text.split("\n")) else ""
+        prefix_m = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", line[:pos["character"]])
+        prefix = prefix_m.group() if prefix_m else ""
+        if not prefix:
+            return []
+        items = []
+        for e in self.db.search_entities(prefix + "*", 50):
+            items.append({
+                "label": e["name"],
+                "kind": LSP_KIND.get(e["kind"], 1),
+                "data": {"name": e["name"]},
+                "sortText": ("0" if e["name"] == prefix else "1") + e["name"],
+            })
+        return items
+
+    def on_completion_resolve(self, item: dict) -> dict:
+        rows = self.db.get_definition(item["label"])
+        if rows:
+            e = rows[0]
+            item["detail"] = f"{e['kind']} — {e['file']}:{e['line']}"
+            tu = next((t for t in self.db.list_tus()
+                       if t["primary_file"].endswith(e["file"].split("/")[-1])), None)
+            item["documentation"] = f"编译器: {tu['compiler']}" if tu else ""
+        return item
+
+    # signature help（基于已索引的 CodeXM AST）
+    def on_signature_help(self, params: dict) -> dict | None:
+        pos = params["position"]
+        text = _DOCS.get(params["textDocument"]["uri"], "")
+        lines = text.split("\n")
+        if pos["line"] >= len(lines):
+            return None
+        before = lines[pos["line"]][:pos["character"]]
+        m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*\([^()]*$", before)
+        if not m:
+            return None
+        ast = self.db.get_ast(m.group(1))
+        if not ast:
+            return None
+        params_list = [p.get("type", "?") + " " + p.get("identifier", "?")
+                       for p in ast.get("formalParameterList", [])]
+        label = f"{ast.get('returnType', '')} {ast['name']}({', '.join(params_list)})"
+        return {"signatures": [{"label": label, "parameters": [
+                    {"label": [label.index(p), label.index(p) + len(p)]} for p in params_list
+                ]}],
+                "activeSignature": 0, "activeParameter": 0}
+
     # call hierarchy
     def on_prepare_call_hierarchy(self, params: dict) -> list | None:
         pos = params["position"]
@@ -239,6 +326,12 @@ def serve(db_path: str) -> None:
         "textDocument/definition": state.on_definition,
         "textDocument/references": state.on_references,
         "textDocument/hover": state.on_hover,
+        "textDocument/declaration": state.on_declaration,
+        "textDocument/documentSymbol": state.on_document_symbol,
+        "workspace/symbol": state.on_workspace_symbol,
+        "textDocument/completion": state.on_completion,
+        "completionItem/resolve": state.on_completion_resolve,
+        "textDocument/signatureHelp": state.on_signature_help,
         "textDocument/prepareCallHierarchy": state.on_prepare_call_hierarchy,
         "callHierarchy/incomingCalls": lambda p: state._callers_of(p["item"]),
         "callHierarchy/outgoingCalls": lambda p: state._callees_of(p["item"]),
