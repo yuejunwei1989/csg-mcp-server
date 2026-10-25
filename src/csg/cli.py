@@ -26,16 +26,28 @@ def cmd_index(args: argparse.Namespace) -> None:
     mode = "mock" if runner.is_mock else "real"
     print(f"[csg-index] 模式: {mode}, idir: {runner.idir}")
 
-    tus = parse_tus(runner.run(["cov-manage-emit", "list", "--json-output"]))
+    if runner.is_mock:
+        tus = parse_tus(runner.run(["cov-manage-emit", "list", "--json-output"]))
+        entities = parse_entities(
+            runner.run(["cov-manage-emit", "find", ".*", "--print-callees", "--json-output"])
+        )
+    else:
+        # 真实模式：cov-manage-emit 原生为文本输出（已实测校准）
+        from .coverity import parse_tus_text, parse_entities_text
+        tus = parse_tus_text(runner.run(["cov-manage-emit", "list"]))
+        entities = parse_entities_text(
+            runner.run(["cov-manage-emit", "find", ".*", "--print-callees"])
+        )
     print(f"[csg-index] TU: {len(tus)}")
-
-    entities = parse_entities(
-        runner.run(["cov-manage-emit", "find", ".*", "--print-callees", "--json-output"])
-    )
     print(f"[csg-index] 实体: {len(entities)}, 调用边: {sum(len(e.callees) for e in entities)}")
 
-    issues = parse_issues(runner.run(["cov-format-errors", "--json-output-v10"]))
-    print(f"[csg-index] 缺陷: {len(issues)}")
+    issues = []
+    try:
+        issues = parse_issues(runner.run(["cov-format-errors", "--json-output-v10"]))
+        print(f"[csg-index] 缺陷: {len(issues)}")
+    except (FileNotFoundError, RuntimeError) as exc:
+        # Coverity Scan 精简工具链无 cov-format-errors（分析在云端），缺陷可用性降级
+        print(f"[csg-index] 缺陷: 跳过（{exc}）")
 
     db = GraphDB(args.db)
     stats = db.build(tus, entities, issues)
